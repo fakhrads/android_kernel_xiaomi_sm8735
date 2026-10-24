@@ -22,6 +22,7 @@
 #include <linux/platform_device.h>
 #include <soc/qcom/dcvs.h>
 #include <soc/qcom/of_common.h>
+#include <soc/qcom/dcvs_boost.h>
 #include "dcvs_private.h"
 #include "trace-dcvs.h"
 
@@ -917,7 +918,22 @@ static struct platform_driver qcom_dcvs_driver = {
 		.suppress_bind_attrs = true,
 	},
 };
-module_platform_driver(qcom_dcvs_driver);
+static int __init qcom_dcvs_init(void)
+{
+	int ret = platform_driver_register(&qcom_dcvs_driver);
+
+	if (!ret)
+		dcvs_boost_init();
+	return ret;
+}
+module_init(qcom_dcvs_init);
+
+static void __exit qcom_dcvs_exit(void)
+{
+	dcvs_boost_exit();
+	platform_driver_unregister(&qcom_dcvs_driver);
+}
+module_exit(qcom_dcvs_exit);
 
 MODULE_DESCRIPTION("QCOM DCVS Driver");
 MODULE_LICENSE("GPL");

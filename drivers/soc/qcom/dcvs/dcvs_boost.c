@@ -36,6 +36,7 @@ static DECLARE_BITMAP(pending_max_hw, NUM_DCVS_HW_TYPES);
 
 static atomic_long_t boost_expires = ATOMIC_LONG_INIT(0);
 static struct delayed_work boost_disable_work;
+static bool dcvs_boost_inited;
 
 static inline bool boost_window_expired(unsigned long now, unsigned long exp)
 {
@@ -221,11 +222,16 @@ static void dcvs_boost_worker(struct work_struct *work)
 
 void qcom_dcvs_bus_boost_kick(unsigned int duration_ms)
 {
-	unsigned long now = jiffies;
-	unsigned long new_exp = now + msecs_to_jiffies(duration_ms);
-	unsigned long old = atomic_long_read(&boost_expires);
+	unsigned long now, new_exp, old;
 	unsigned long mask[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
 	int i;
+
+	if (unlikely(!dcvs_boost_inited))
+		return;
+
+	now = jiffies;
+	new_exp = now + msecs_to_jiffies(duration_ms);
+	old = atomic_long_read(&boost_expires);
 
 	for (i = 0; i < ARRAY_SIZE(boost_hw_list); i++) {
 		enum dcvs_hw_type hw = boost_hw_list[i];
@@ -257,11 +263,16 @@ EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick);
 
 void qcom_dcvs_bus_boost_kick_max(unsigned int duration_ms)
 {
-	unsigned long now = jiffies;
-	unsigned long new_exp = now + msecs_to_jiffies(duration_ms);
-	unsigned long old = atomic_long_read(&boost_expires);
+	unsigned long now, new_exp, old;
 	unsigned long mask[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
 	int i;
+
+	if (unlikely(!dcvs_boost_inited))
+		return;
+
+	now = jiffies;
+	new_exp = now + msecs_to_jiffies(duration_ms);
+	old = atomic_long_read(&boost_expires);
 
 	for (i = 0; i < ARRAY_SIZE(boost_hw_list); i++)
 		__set_bit(boost_hw_list[i], mask);
@@ -285,18 +296,20 @@ void qcom_dcvs_bus_boost_kick_max(unsigned int duration_ms)
 }
 EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick_max);
 
-static int __init dcvs_boost_init(void)
+int dcvs_boost_init(void)
 {
 	INIT_DELAYED_WORK(&boost_disable_work, dcvs_boost_worker);
 	BUILD_BUG_ON(NUM_DCVS_HW_TYPES > 32);
 	bitmap_zero(pending_hw, NUM_DCVS_HW_TYPES);
 	bitmap_zero(pending_max_hw, NUM_DCVS_HW_TYPES);
+	dcvs_boost_inited = true;
 	pr_info("initialized\n");
 	return 0;
 }
 
-static void __exit dcvs_boost_exit(void)
+void dcvs_boost_exit(void)
 {
+	dcvs_boost_inited = false;
 	mutex_lock(&boost_lock);
 	if (!bitmap_empty(active_hw, NUM_DCVS_HW_TYPES))
 		(void)apply_votes(active_hw, true);
@@ -308,9 +321,3 @@ static void __exit dcvs_boost_exit(void)
 	mutex_unlock(&boost_lock);
 	cancel_delayed_work_sync(&boost_disable_work);
 }
-
-module_init(dcvs_boost_init);
-module_exit(dcvs_boost_exit);
-
-MODULE_DESCRIPTION("QCOM DCVS timed boost (DDR/LLCC/L3)");
-MODULE_LICENSE("GPL");

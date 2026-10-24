@@ -144,7 +144,7 @@ config QTI_DYNPF_SCMI
 	  the DYNPF settings.
 
 config QCOM_DCVS_BOOST
-	tristate "Qualcomm DCVS timed boost (DDR/LLCC/L3)"
+	bool "Qualcomm DCVS timed boost (DDR/LLCC/L3)"
 	depends on QCOM_DCVS
 	help
 	  Enable a DCVS booster that temporarily raises the DDR, LLCC,
