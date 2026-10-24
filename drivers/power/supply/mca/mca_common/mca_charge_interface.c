@@ -292,7 +292,7 @@ static struct mca_sysfs_attr_info mca_charge_if_sysfs_field_tbl[] = {
 			  MCA_CHRAGE_IF_SYSFS_CHARGE_ENABLE, charge_enable),
 	mca_sysfs_attr_rw(mca_charge_if_sysfs, 0640,
 			  MCA_CHARGE_IF_SYSFS_IIN_LIMIT, iin_limit),
-	mca_sysfs_attr_rw(mca_charge_if_sysfs, 0666,
+	mca_sysfs_attr_rw(mca_charge_if_sysfs, 0664,
 			  MCA_CHRAGE_IF_SYSFS_ICHG_LIMIT, ichg_limit),
 	mca_sysfs_attr_rw(mca_charge_if_sysfs, 0640,
 			  MCA_CHRAGE_IF_SYSFS_POWER_LIMIT, power_limit),
