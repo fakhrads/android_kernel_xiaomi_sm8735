@@ -42,7 +42,7 @@ static unsigned int kp_override_mode;
 static bool kp_override;
 
 static bool auto_kp __read_mostly = 0;
-module_param(auto_kp, bool, 0664);
+module_param(auto_kp, bool, 0666);
 MODULE_PARM_DESC(auto_kp, "Enable/disable automatic kernel profile management");
 
 static unsigned int kp_mode = CONFIG_KP_DEFAULT_MODE;
@@ -273,7 +273,7 @@ static inline ssize_t kp_mode_store(struct kobject *kobj,
 }
 
 static struct kobj_attribute kp_mode_attribute =
-	__ATTR(kp_mode, 0664, kp_mode_show, kp_mode_store);
+	__ATTR(kp_mode, 0666, kp_mode_show, kp_mode_store);
 
 static struct attribute *kp_attrs[] = {
 	&kp_mode_attribute.attr,
