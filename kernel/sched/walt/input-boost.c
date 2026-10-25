@@ -15,6 +15,7 @@
 #include <linux/time.h>
 #include <linux/sysfs.h>
 #include <linux/pm_qos.h>
+#include <linux/kprofiles.h>
 
 #include "walt.h"
 
@@ -141,14 +142,18 @@ static void do_input_boost(struct work_struct *work)
 	pr_debug("Setting input boost min for all CPUs\n");
 	for_each_possible_cpu(cpu) {
 		i_sync_info = &per_cpu(sync_info, cpu);
-		i_sync_info->input_boost_min = sysctl_input_boost_freq[cpu];
+		/* In Balanced mode (Mode 2), don't boost Prime (cpu 7) on touch */
+		if (kp_active_mode() == 2 && cpu >= 7)
+			i_sync_info->input_boost_min = 0;
+		else
+			i_sync_info->input_boost_min = sysctl_input_boost_freq[cpu];
 	}
 
 	/* Update policies for all online CPUs */
 	update_policy_online();
 
 	/* Enable scheduler boost to migrate tasks to big cluster */
-	if (sysctl_sched_boost_on_input > 0) {
+	if (sysctl_sched_boost_on_input > 0 && kp_active_mode() != 2) {
 		ret = sched_set_boost(sysctl_sched_boost_on_input);
 		if (ret)
 			pr_err("input-boost: sched boost enable failed\n");
@@ -166,6 +171,13 @@ static void inputboost_input_event(struct input_handle *handle,
 	u64 now;
 	int cpu;
 	int enabled = 0;
+
+	/*
+	 * KProfiles Mode 1 (Battery): Disable kernel input boost entirely.
+	 * Keeps CPU at base frequencies on touch/scroll events to eliminate thermal spikes.
+	 */
+	if (kp_active_mode() == 1)
+		return;
 
 	for_each_possible_cpu(cpu) {
 		if (sysctl_input_boost_freq[cpu] > 0) {

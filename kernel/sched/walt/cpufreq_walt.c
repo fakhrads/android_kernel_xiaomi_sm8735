@@ -12,6 +12,7 @@
 
 #include <linux/kthread.h>
 #include <trace/events/power.h>
+#include <linux/kprofiles.h>
 
 #include "walt.h"
 #include "trace.h"
@@ -472,6 +473,40 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 		freq = freq_cap[PARTIAL_HALT_CAP][cluster->id];
 		wg_driv_cpu->reasons |= CPUFREQ_REASON_PARTIAL_HALT_CAP_BIT;
 	}
+
+#if IS_ENABLED(CONFIG_KPROFILES)
+	switch (kp_active_mode()) {
+	case 1: /* BATTERY: clamp below V/F knee to protect battery thermal budget */
+		if (policy->cpu >= 7) {
+			/* Prime X4 (cpu 7): clamp at 1.48 GHz */
+			if (freq > 1478400)
+				freq = 1478400;
+		} else if (policy->cpu >= 2) {
+			/* Gold A720 (cpu 2-6): clamp at 1.82 GHz */
+			if (freq > 1824000)
+				freq = 1824000;
+		} else {
+			/* Silver A520 (cpu 0-1): clamp at 1.52 GHz */
+			if (freq > 1516800)
+				freq = 1516800;
+		}
+		break;
+	case 2: /* BALANCED: clamp precisely at hardware V/F efficiency knee */
+		if (policy->cpu >= 7) {
+			/* Prime X4 (cpu 7): cap at 2.40 GHz (avoids steep >1.05V curve) */
+			if (freq > 2400000)
+				freq = 2400000;
+		} else if (policy->cpu >= 2) {
+			/* Gold A720 (cpu 2-6): cap at 2.21 GHz */
+			if (freq > 2208000)
+				freq = 2208000;
+		}
+		break;
+	case 3: /* PERFORMANCE: uncapped (allows up to 2.84 GHz) */
+	default:
+		break;
+	}
+#endif
 
 	if ((wg_driv_cpu->flags & WALT_CPUFREQ_UCLAMP_BIT) &&
 		((wrq->uclamp_limit[UCLAMP_MIN] != 0) ||
