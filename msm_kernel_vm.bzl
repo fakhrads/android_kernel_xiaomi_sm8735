@@ -141,7 +141,7 @@ def _define_kernel_build(
       dtb_list: device tree blobs expected to be built
       dtbo_list: device tree overlay blobs expected to be built
     """
-    out_list = [".config", "Module.symvers"]
+    out_list = [".config", "Module.symvers", "utsrelease.h"]
 
     if dtb_list:
         out_list += dtb_list
