@@ -476,7 +476,22 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 
 #if IS_ENABLED(CONFIG_KPROFILES)
 	switch (kp_active_mode()) {
-	case 1: /* BATTERY: clamp below V/F knee to protect battery thermal budget */
+	case 1: /* COOL BATTERY: aggressive clamp to keep phone ice cold (<35 C) */
+		if (policy->cpu >= 7) {
+			/* Prime X4 (cpu 7): clamp at 1.20 GHz */
+			if (freq > 1209600)
+				freq = 1209600;
+		} else if (policy->cpu >= 2) {
+			/* Gold A720 (cpu 2-6): clamp at 1.48 GHz */
+			if (freq > 1478400)
+				freq = 1478400;
+		} else {
+			/* Silver A520 (cpu 0-1): clamp at 1.25 GHz */
+			if (freq > 1248000)
+				freq = 1248000;
+		}
+		break;
+	case 2: /* BATTERY: clamp below V/F knee to protect battery thermal budget */
 		if (policy->cpu >= 7) {
 			/* Prime X4 (cpu 7): clamp at 1.48 GHz */
 			if (freq > 1478400)
@@ -491,7 +506,7 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 				freq = 1516800;
 		}
 		break;
-	case 2: /* BALANCED: clamp precisely at hardware V/F efficiency knee */
+	case 3: /* BALANCED: clamp precisely at hardware V/F efficiency knee */
 		if (policy->cpu >= 7) {
 			/* Prime X4 (cpu 7): cap at 2.40 GHz (avoids steep >1.05V curve) */
 			if (freq > 2400000)
@@ -502,7 +517,10 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 				freq = 2208000;
 		}
 		break;
-	case 3: /* PERFORMANCE: uncapped (allows up to 2.84 GHz) */
+	case 4: /* HIGH PERFORMANCE: uncapped (allows up to 2.84 GHz) */
+		break;
+	case 5: /* ULTRA HIGH PERFORMANCE: uncapped (allows up to 2.84 GHz) */
+		break;
 	default:
 		break;
 	}
