@@ -250,14 +250,15 @@ void qcom_dcvs_bus_boost_kick(unsigned int duration_ms)
 			break;
 	}
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
-
+	/* The worker takes the pending bits, so they have to be set before it can run */
 	{
 		unsigned long flags;
 		spin_lock_irqsave(&pending_lock, flags);
 		bitmap_or(pending_hw, pending_hw, mask, NUM_DCVS_HW_TYPES);
 		spin_unlock_irqrestore(&pending_lock, flags);
 	}
+
+	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick);
 
@@ -285,14 +286,15 @@ void qcom_dcvs_bus_boost_kick_max(unsigned int duration_ms)
 			break;
 	}
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
-
+	/* The worker takes the pending bits, so they have to be set before it can run */
 	{
 		unsigned long flags;
 		spin_lock_irqsave(&pending_lock, flags);
 		bitmap_or(pending_max_hw, pending_max_hw, mask, NUM_DCVS_HW_TYPES);
 		spin_unlock_irqrestore(&pending_lock, flags);
 	}
+
+	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick_max);
 

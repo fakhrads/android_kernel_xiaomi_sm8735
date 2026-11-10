@@ -160,10 +160,11 @@ void cpu_boost_max(unsigned int duration_ms)
 			break;
 	}
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
+	/* The worker takes the pending bits, so they have to be set before it can run */
 	spin_lock_irqsave(&pending_lock, flags);
 	bitmap_fill(pending_max_enable, NR_CPUS);
 	spin_unlock_irqrestore(&pending_lock, flags);
+	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(cpu_boost_max);
 
@@ -182,10 +183,11 @@ void cpu_boost_kick(unsigned int duration_ms)
 			break;
 	}
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
+	/* The worker takes the pending bits, so they have to be set before it can run */
 	spin_lock_irqsave(&pending_lock, flags);
 	bitmap_fill(pending_kick_enable, NR_CPUS);
 	spin_unlock_irqrestore(&pending_lock, flags);
+	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(cpu_boost_kick);
 
