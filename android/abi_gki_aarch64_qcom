@@ -1190,6 +1190,7 @@
   mdiobus_c45_modify_changed
   __mdiobus_read
   mdiobus_read
+  __mdiobus_write
   mdiobus_write
   mdio_device_reset
   media_device_cleanup
@@ -1517,12 +1518,15 @@
   phy_read_mmd
   phy_resolve_aneg_pause
   phy_restart_aneg
+  phy_restore_page
+  phy_select_page
   phy_set_mode_ext
   phy_sfp_attach
   phy_sfp_detach
   phy_sfp_probe
   phy_trigger_machine
   phy_write_mmd
+  phy_write_paged
   pick_highest_pushable_task
   pick_migrate_task
   pid_nr_ns
