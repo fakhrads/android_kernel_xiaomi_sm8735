@@ -33,6 +33,8 @@ static DEFINE_MUTEX(boost_lock);
 static DEFINE_SPINLOCK(pending_lock);
 static DECLARE_BITMAP(pending_hw, NUM_DCVS_HW_TYPES);
 static DECLARE_BITMAP(pending_max_hw, NUM_DCVS_HW_TYPES);
+static bool hw_engaged;
+static bool max_hw_engaged;
 
 static atomic_long_t boost_expires = ATOMIC_LONG_INIT(0);
 static struct delayed_work boost_disable_work;
@@ -172,41 +174,71 @@ static void dcvs_boost_worker(struct work_struct *work)
 	unsigned long flags;
 	unsigned long en_mask[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
 	unsigned long en_max[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
-	unsigned long now = jiffies;
-	unsigned long exp = atomic_long_read(&boost_expires);
-	unsigned long delay;
+	unsigned long delta[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
+	unsigned long now, exp, delay;
+	bool has_hw, has_max;
 
 	spin_lock_irqsave(&pending_lock, flags);
-	if (!bitmap_empty(pending_hw, NUM_DCVS_HW_TYPES))
+	has_hw = !bitmap_empty(pending_hw, NUM_DCVS_HW_TYPES);
+	if (has_hw) {
 		bitmap_copy(en_mask, pending_hw, NUM_DCVS_HW_TYPES);
-
-	if (!bitmap_empty(pending_max_hw, NUM_DCVS_HW_TYPES))
+		bitmap_zero(pending_hw, NUM_DCVS_HW_TYPES);
+	}
+	has_max = !bitmap_empty(pending_max_hw, NUM_DCVS_HW_TYPES);
+	if (has_max) {
 		bitmap_copy(en_max, pending_max_hw, NUM_DCVS_HW_TYPES);
-
-	bitmap_zero(pending_hw, NUM_DCVS_HW_TYPES);
-	bitmap_zero(pending_max_hw, NUM_DCVS_HW_TYPES);
+		bitmap_zero(pending_max_hw, NUM_DCVS_HW_TYPES);
+	}
 	spin_unlock_irqrestore(&pending_lock, flags);
 
-	if (!bitmap_empty(en_mask, NUM_DCVS_HW_TYPES) || !bitmap_empty(en_max, NUM_DCVS_HW_TYPES)) {
+	if (has_hw || has_max) {
 		mutex_lock(&boost_lock);
-		if (!bitmap_empty(en_mask, NUM_DCVS_HW_TYPES)) {
-			bitmap_or(active_hw, active_hw, en_mask, NUM_DCVS_HW_TYPES);
-			(void)apply_votes(en_mask, false);
+		if (has_hw) {
+			bitmap_andnot(delta, en_mask, active_hw, NUM_DCVS_HW_TYPES);
+			if (!bitmap_empty(delta, NUM_DCVS_HW_TYPES)) {
+				bitmap_or(active_hw, active_hw, delta, NUM_DCVS_HW_TYPES);
+				(void)apply_votes(delta, false);
+			}
 		}
-		if (!bitmap_empty(en_max, NUM_DCVS_HW_TYPES)) {
-			bitmap_or(active_max_hw, active_max_hw, en_max, NUM_DCVS_HW_TYPES);
-			(void)apply_votes_max(en_max, false);
+		if (has_max) {
+			bitmap_andnot(delta, en_max, active_max_hw, NUM_DCVS_HW_TYPES);
+			if (!bitmap_empty(delta, NUM_DCVS_HW_TYPES)) {
+				bitmap_or(active_max_hw, active_max_hw, delta, NUM_DCVS_HW_TYPES);
+				(void)apply_votes_max(delta, false);
+			}
 		}
 		mutex_unlock(&boost_lock);
+
+		spin_lock_irqsave(&pending_lock, flags);
+		if (has_hw)
+			hw_engaged = true;
+		if (has_max)
+			max_hw_engaged = true;
+		spin_unlock_irqrestore(&pending_lock, flags);
 	}
 
+	/*
+	 * Re-check expiry and pending requests under pending_lock before
+	 * clearing engaged flags so a concurrent kick cannot be lost.
+	 */
+	spin_lock_irqsave(&pending_lock, flags);
 	now = jiffies;
 	exp = atomic_long_read(&boost_expires);
-	if (!boost_window_expired(now, exp)) {
-		delay = time_after(exp, now) ? exp - now : 0;
+	if (!boost_window_expired(now, exp) ||
+	    !bitmap_empty(pending_hw, NUM_DCVS_HW_TYPES) ||
+	    !bitmap_empty(pending_max_hw, NUM_DCVS_HW_TYPES)) {
+		if (!bitmap_empty(pending_hw, NUM_DCVS_HW_TYPES) ||
+		    !bitmap_empty(pending_max_hw, NUM_DCVS_HW_TYPES))
+			delay = 0;
+		else
+			delay = time_after(exp, now) ? exp - now : 1;
+		spin_unlock_irqrestore(&pending_lock, flags);
 		mod_delayed_work(system_unbound_wq, &boost_disable_work, delay);
 		return;
 	}
+	hw_engaged = false;
+	max_hw_engaged = false;
+	spin_unlock_irqrestore(&pending_lock, flags);
 
 	mutex_lock(&boost_lock);
 	if (!bitmap_empty(active_hw, NUM_DCVS_HW_TYPES))
@@ -220,18 +252,30 @@ static void dcvs_boost_worker(struct work_struct *work)
 	mutex_unlock(&boost_lock);
 }
 
+static inline void extend_boost_expiry(unsigned int duration_ms)
+{
+	unsigned long now = jiffies;
+	unsigned long new_exp = now + msecs_to_jiffies(duration_ms);
+	unsigned long old = atomic_long_read(&boost_expires);
+
+	for (;;) {
+		if (time_after(old, new_exp))
+			break;
+
+		if (atomic_long_try_cmpxchg(&boost_expires, &old, new_exp))
+			break;
+	}
+}
+
 void qcom_dcvs_bus_boost_kick(unsigned int duration_ms)
 {
-	unsigned long now, new_exp, old;
 	unsigned long mask[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
+	unsigned long flags;
+	bool queue = false;
 	int i;
 
 	if (unlikely(!dcvs_boost_inited))
 		return;
-
-	now = jiffies;
-	new_exp = now + msecs_to_jiffies(duration_ms);
-	old = atomic_long_read(&boost_expires);
 
 	for (i = 0; i < ARRAY_SIZE(boost_hw_list); i++) {
 		enum dcvs_hw_type hw = boost_hw_list[i];
@@ -242,59 +286,44 @@ void qcom_dcvs_bus_boost_kick(unsigned int duration_ms)
 	if (bitmap_empty(mask, NUM_DCVS_HW_TYPES))
 		return;
 
-	for (;;) {
-		if (time_after(old, new_exp))
-			break;
+	extend_boost_expiry(duration_ms);
 
-		if (atomic_long_try_cmpxchg(&boost_expires, &old, new_exp))
-			break;
-	}
-
-	/* The worker takes the pending bits, so they have to be set before it can run */
-	{
-		unsigned long flags;
-		spin_lock_irqsave(&pending_lock, flags);
+	spin_lock_irqsave(&pending_lock, flags);
+	if (!hw_engaged) {
 		bitmap_or(pending_hw, pending_hw, mask, NUM_DCVS_HW_TYPES);
-		spin_unlock_irqrestore(&pending_lock, flags);
+		queue = true;
 	}
+	spin_unlock_irqrestore(&pending_lock, flags);
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
+	if (queue)
+		mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick);
 
 void qcom_dcvs_bus_boost_kick_max(unsigned int duration_ms)
 {
-	unsigned long now, new_exp, old;
 	unsigned long mask[BITS_TO_LONGS(NUM_DCVS_HW_TYPES)] = { 0 };
+	unsigned long flags;
+	bool queue = false;
 	int i;
 
 	if (unlikely(!dcvs_boost_inited))
 		return;
 
-	now = jiffies;
-	new_exp = now + msecs_to_jiffies(duration_ms);
-	old = atomic_long_read(&boost_expires);
-
 	for (i = 0; i < ARRAY_SIZE(boost_hw_list); i++)
 		__set_bit(boost_hw_list[i], mask);
 
-	for (;;) {
-		if (time_after(old, new_exp))
-			break;
+	extend_boost_expiry(duration_ms);
 
-		if (atomic_long_try_cmpxchg(&boost_expires, &old, new_exp))
-			break;
-	}
-
-	/* The worker takes the pending bits, so they have to be set before it can run */
-	{
-		unsigned long flags;
-		spin_lock_irqsave(&pending_lock, flags);
+	spin_lock_irqsave(&pending_lock, flags);
+	if (!max_hw_engaged) {
 		bitmap_or(pending_max_hw, pending_max_hw, mask, NUM_DCVS_HW_TYPES);
-		spin_unlock_irqrestore(&pending_lock, flags);
+		queue = true;
 	}
+	spin_unlock_irqrestore(&pending_lock, flags);
 
-	mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
+	if (queue)
+		mod_delayed_work(system_unbound_wq, &boost_disable_work, 0);
 }
 EXPORT_SYMBOL_GPL(qcom_dcvs_bus_boost_kick_max);
 
@@ -304,6 +333,8 @@ int dcvs_boost_init(void)
 	BUILD_BUG_ON(NUM_DCVS_HW_TYPES > 32);
 	bitmap_zero(pending_hw, NUM_DCVS_HW_TYPES);
 	bitmap_zero(pending_max_hw, NUM_DCVS_HW_TYPES);
+	hw_engaged = false;
+	max_hw_engaged = false;
 	dcvs_boost_inited = true;
 	pr_info("initialized\n");
 	return 0;
@@ -311,7 +342,17 @@ int dcvs_boost_init(void)
 
 void dcvs_boost_exit(void)
 {
+	unsigned long flags;
+
 	dcvs_boost_inited = false;
+	spin_lock_irqsave(&pending_lock, flags);
+	hw_engaged = false;
+	max_hw_engaged = false;
+	bitmap_zero(pending_hw, NUM_DCVS_HW_TYPES);
+	bitmap_zero(pending_max_hw, NUM_DCVS_HW_TYPES);
+	spin_unlock_irqrestore(&pending_lock, flags);
+
+	cancel_delayed_work_sync(&boost_disable_work);
 	mutex_lock(&boost_lock);
 	if (!bitmap_empty(active_hw, NUM_DCVS_HW_TYPES))
 		(void)apply_votes(active_hw, true);
@@ -321,5 +362,4 @@ void dcvs_boost_exit(void)
 	bitmap_zero(active_hw, NUM_DCVS_HW_TYPES);
 	bitmap_zero(active_max_hw, NUM_DCVS_HW_TYPES);
 	mutex_unlock(&boost_lock);
-	cancel_delayed_work_sync(&boost_disable_work);
 }
