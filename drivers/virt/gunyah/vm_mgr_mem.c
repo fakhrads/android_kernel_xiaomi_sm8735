@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) "gunyah_vm_mgr: " fmt
 
 #include <asm/gunyah.h>
+#include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 
@@ -361,6 +362,7 @@ int gunyah_vm_binding_alloc(struct gunyah_vm *ghvm,
 			    bool lend)
 {
 	struct gunyah_vm_gup_binding *binding;
+	struct vm_area_struct *vma;
 	int ret = 0;
 
 	if (!region->memory_size || !PAGE_ALIGNED(region->memory_size) ||
@@ -386,6 +388,33 @@ int gunyah_vm_binding_alloc(struct gunyah_vm *ghvm,
 	} else {
 		binding->share_type = VM_MEM_SHARE;
 	}
+
+	/*
+	 * Guest memory bindings are pinned with FOLL_LONGTERM on demand fault.
+	 * Clear __GFP_MOVABLE on the backing file mapping (shmem/memfd) so new
+	 * folios are allocated directly from non-movable/non-CMA pageblocks
+	 * (matching guest_memfd's GFP_HIGHUSER behavior) instead of allocating
+	 * CMA pages that later fail FOLL_LONGTERM migration under concurrent I/O.
+	 */
+	mmap_read_lock(ghvm->mm_s);
+	{
+		VMA_ITERATOR(vmi, ghvm->mm_s, binding->userspace_addr);
+
+		for_each_vma_range(vmi, vma,
+				   binding->userspace_addr + binding->size) {
+			if (vma->vm_file && vma->vm_file->f_mapping) {
+				struct address_space *mapping =
+					vma->vm_file->f_mapping;
+
+				mapping_set_gfp_mask(
+					mapping,
+					mapping_gfp_mask(mapping) &
+						~__GFP_MOVABLE);
+			}
+		}
+	}
+	mmap_read_unlock(ghvm->mm_s);
+
 	down_write(&ghvm->bindings_lock);
 	ret = mtree_insert_range(&ghvm->bindings,
 				 gunyah_gpa_to_gfn(binding->guest_phys_addr),
@@ -411,7 +440,7 @@ int gunyah_gup_demand_page(struct gunyah_vm *ghvm, u64 gpa, bool write)
 	struct page *page;
 	struct folio *folio;
 
-	down_write(&ghvm->bindings_lock);
+	down_read(&ghvm->bindings_lock);
 	b = mtree_load(&ghvm->bindings, gfn);
 	if (!b) {
 		ret = -ENOENT;
@@ -442,11 +471,14 @@ retry_pin:
 					gup_flags, &page);
 
 	if (pinned != 1) {
-		if ((pinned == -ENOMEM || pinned == -EBUSY) && ++tries < 5) {
-			cond_resched();
+		if ((pinned == -ENOMEM || pinned == -EBUSY) && ++tries < 10) {
+			usleep_range(50, 100);
 			goto retry_pin;
 		}
 		ret = pinned < 0 ? pinned : -EFAULT;
+		pr_err_ratelimited(
+			"Failed to pin user page for guest addr: %016llx (uaddr: %016llx): %d\n",
+			gpa, b->userspace_addr + offset, ret);
 		goto unlock_page;
 	}
 
@@ -476,7 +508,7 @@ unpin_page:
 unlock_page:
 	account_locked_vm(ghvm->mm_s, 1, false);
 unlock:
-	up_write(&ghvm->bindings_lock);
+	up_read(&ghvm->bindings_lock);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(gunyah_gup_demand_page);
