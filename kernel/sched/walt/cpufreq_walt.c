@@ -506,15 +506,15 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 				freq = 1516800;
 		}
 		break;
-	case 3: /* BALANCED: clamp precisely at hardware V/F efficiency knee */
+	case 3: /* BALANCED: allow smooth 120Hz race-to-idle bursts while staying below peak V/F cliff */
 		if (policy->cpu >= 7) {
-			/* Prime X4 (cpu 7): cap at 2.40 GHz (avoids steep >1.05V curve) */
-			if (freq > 2400000)
-				freq = 2400000;
+			/* Prime X4 (cpu 7): cap at 2.75 GHz (well below 3.21 GHz peak cliff) */
+			if (freq > 2745600)
+				freq = 2745600;
 		} else if (policy->cpu >= 2) {
-			/* Gold A720 (cpu 2-6): cap at 2.21 GHz */
-			if (freq > 2208000)
-				freq = 2208000;
+			/* Gold A720 (cpu 2-6): cap at 2.61 GHz (well below 3.01 GHz peak cliff) */
+			if (freq > 2611200)
+				freq = 2611200;
 		}
 		break;
 	case 4: /* HIGH PERFORMANCE: uncapped (allows up to 2.84 GHz) */
