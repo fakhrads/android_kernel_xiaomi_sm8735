@@ -387,14 +387,20 @@ int gunyah_vm_binding_alloc(struct gunyah_vm *ghvm,
 
 	/*
 	 * Guest memory bindings are pinned with FOLL_LONGTERM on demand fault.
-	 * Clear __GFP_MOVABLE on the backing file mapping (shmem/memfd) so new
-	 * folios are allocated directly from non-movable/non-CMA pageblocks
-	 * (matching guest_memfd's GFP_HIGHUSER behavior) instead of allocating
-	 * CMA pages that later fail FOLL_LONGTERM migration under concurrent I/O.
+	 * 1) Clear __GFP_MOVABLE on the backing file mapping (shmem/memfd) so new
+	 *    folios are allocated directly from non-movable/non-CMA pageblocks
+	 *    instead of CMA pages that fail FOLL_LONGTERM migration.
+	 * 2) Mark 2 MiB-aligned lent guest RAM VMAs with VM_HUGEPAGE so shmem
+	 *    (with SHMEM_HUGE_ADVISE) allocates 2 MiB THP folios, cutting Gunyah
+	 *    Stage-2 / TrustZone AC mapping entries by 512x and preventing
+	 *    hypervisor pool exhaustion at >512 MiB guest usage.
 	 */
-	mmap_read_lock(ghvm->mm_s);
+	mmap_write_lock(ghvm->mm_s);
 	{
 		VMA_ITERATOR(vmi, ghvm->mm_s, binding->userspace_addr);
+		bool want_huge = IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) &&
+				 IS_ALIGNED(binding->guest_phys_addr, PMD_SIZE) &&
+				 IS_ALIGNED(binding->size, PMD_SIZE);
 
 		for_each_vma_range(vmi, vma,
 				   binding->userspace_addr + binding->size) {
@@ -406,10 +412,12 @@ int gunyah_vm_binding_alloc(struct gunyah_vm *ghvm,
 					mapping,
 					mapping_gfp_mask(mapping) &
 						~__GFP_MOVABLE);
+				if (want_huge)
+					vm_flags_set(vma, VM_HUGEPAGE);
 			}
 		}
 	}
-	mmap_read_unlock(ghvm->mm_s);
+	mmap_write_unlock(ghvm->mm_s);
 
 	down_write(&ghvm->bindings_lock);
 	ret = mtree_insert_range(&ghvm->bindings,

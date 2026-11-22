@@ -537,7 +537,7 @@ static bool shmem_confirm_swap(struct address_space *mapping,
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 /* ifdef here to avoid bloating shmem.o when not necessary */
 
-static int shmem_huge __read_mostly = SHMEM_HUGE_NEVER;
+static int shmem_huge __read_mostly = SHMEM_HUGE_ADVISE;
 
 static bool __shmem_is_huge(struct inode *inode, pgoff_t index,
 			    bool shmem_huge_force, struct mm_struct *mm,
@@ -2049,6 +2049,9 @@ repeat:
 		goto alloc_nohuge;
 
 	huge_gfp = vma_thp_gfp_mask(vma);
+	if (vma && (vma->vm_flags & VM_HUGEPAGE))
+		huge_gfp |= __GFP_DIRECT_RECLAIM | __GFP_KSWAPD_RECLAIM |
+			    __GFP_NORETRY;
 	huge_gfp = limit_gfp_mask(huge_gfp, gfp);
 	folio = shmem_alloc_and_acct_folio(huge_gfp, inode, index, true);
 	if (IS_ERR(folio)) {
