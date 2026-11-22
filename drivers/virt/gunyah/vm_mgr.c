@@ -972,7 +972,7 @@ int gunyah_gup_reclaim_parcel(struct gunyah_vm *ghvm,
 
 			folio = pfn_folio(PHYS_PFN(le64_to_cpu(entry->phys_addr)));
 
-			if (folio_test_private(folio))
+			if (parcel->n_acl_entries == 1 || folio_test_private(folio))
 				gunyah_folio_host_reclaim(folio);
 
 			unpin_user_page(folio_page(folio, 0));

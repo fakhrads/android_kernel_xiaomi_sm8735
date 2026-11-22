@@ -193,6 +193,14 @@ static inline bool gunyah_folio_lend_safe(struct folio *folio)
 	return true;
 }
 
+static inline void gunyah_folio_host_unmap(struct folio *folio)
+{
+	long i;
+
+	for (i = 0; i < folio_nr_pages(folio); i++)
+		set_direct_map_invalid_noflush(folio_page(folio, i));
+}
+
 /**
  * gunyah_folio_host_reclaim() - Restores kernel logical map to folio
  * @folio: folio to reclaim by host
