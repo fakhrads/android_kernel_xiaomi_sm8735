@@ -6,6 +6,7 @@
 #ifndef _GUNYAH_VM_MGR_PRIV_H
 #define _GUNYAH_VM_MGR_PRIV_H
 
+#include <asm/tlbflush.h>
 #include <linux/device.h>
 #include <linux/kref.h>
 #include <linux/maple_tree.h>
@@ -195,10 +196,12 @@ static inline bool gunyah_folio_lend_safe(struct folio *folio)
 
 static inline void gunyah_folio_host_unmap(struct folio *folio)
 {
+	unsigned long start = (unsigned long)folio_address(folio);
 	long i;
 
 	for (i = 0; i < folio_nr_pages(folio); i++)
 		set_direct_map_invalid_noflush(folio_page(folio, i));
+	flush_tlb_kernel_range(start, start + folio_size(folio));
 }
 
 /**
@@ -209,9 +212,12 @@ static inline void gunyah_folio_host_unmap(struct folio *folio)
  */
 static inline void gunyah_folio_host_reclaim(struct folio *folio)
 {
+	unsigned long start = (unsigned long)folio_address(folio);
 	long i;
+
 	for (i = 0; i < folio_nr_pages(folio); i++)
 		set_direct_map_default_noflush(folio_page(folio, i));
+	flush_tlb_kernel_range(start, start + folio_size(folio));
 }
 
 int gunyah_vm_parcel_to_paged(struct gunyah_vm *ghvm,

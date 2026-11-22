@@ -334,18 +334,14 @@ int gunyah_vm_reclaim_range(struct gunyah_vm *ghvm, u64 gfn, u64 nr)
 	struct folio *folio;
 	int ret, ret2 = 0;
 	void *entry;
-	bool sync;
 
 	mt_for_each(&ghvm->mm, entry, next, gfn + nr) {
 		folio = xa_untag_pointer(entry);
-		g = next;
-		sync = !mt_find_after(&ghvm->mm, &g, gfn + nr);
-
 		g = next - folio_nr_pages(folio);
 		folio_get(folio);
 		folio_lock(folio);
 		if (mtree_load(&ghvm->mm, g) == entry)
-			ret = __gunyah_vm_reclaim_folio_locked(ghvm, entry, g, sync);
+			ret = __gunyah_vm_reclaim_folio_locked(ghvm, entry, g, true);
 		else
 			ret = -EAGAIN;
 		folio_unlock(folio);
@@ -440,7 +436,7 @@ int gunyah_gup_demand_page(struct gunyah_vm *ghvm, u64 gpa, bool write)
 	struct page *page;
 	struct folio *folio;
 
-	down_read(&ghvm->bindings_lock);
+	down_write(&ghvm->bindings_lock);
 	b = mtree_load(&ghvm->bindings, gfn);
 	if (!b) {
 		ret = -ENOENT;
@@ -508,7 +504,7 @@ unpin_page:
 unlock_page:
 	account_locked_vm(ghvm->mm_s, 1, false);
 unlock:
-	up_read(&ghvm->bindings_lock);
+	up_write(&ghvm->bindings_lock);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(gunyah_gup_demand_page);
