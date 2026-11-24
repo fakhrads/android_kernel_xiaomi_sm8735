@@ -23,6 +23,8 @@
 #include <linux/psi.h>
 #include <linux/uio.h>
 #include <linux/sched/task.h>
+#include <linux/sched/topology.h>
+#include <linux/cpumask.h>
 #include <linux/delayacct.h>
 #include <linux/zswap.h>
 #include <linux/kthread.h>
@@ -320,8 +322,21 @@ int kcompressd(void *p)
 {
 	pg_data_t *pgdat = (pg_data_t *)p;
 	struct folio *folio;
+	cpumask_t allowed_mask = CPU_MASK_NONE;
+	int cpu;
 
 	current->flags |= PF_MEMALLOC | PF_KSWAPD;
+
+	/*
+	 * Keep asynchronous swapout compression off the Prime core on
+	 * asymmetric SoCs so background reclaim never preempts render threads.
+	 */
+	for_each_possible_cpu(cpu) {
+		if (arch_scale_cpu_capacity(cpu) < SCHED_CAPACITY_SCALE)
+			cpumask_set_cpu(cpu, &allowed_mask);
+	}
+	if (!cpumask_empty(&allowed_mask))
+		set_cpus_allowed_ptr(current, &allowed_mask);
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(pgdat->kcompressd_wait,
