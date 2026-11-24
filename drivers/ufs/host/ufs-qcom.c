@@ -2084,8 +2084,16 @@ static int ufs_qcom_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op,
 			err = ufs_qcom_unvote_qos_all(hba);
 	}
 
-	if (!err && ufs_qcom_is_link_off(hba) && host->device_reset)
+	if (!err && ufs_qcom_is_link_off(hba) && host->device_reset) {
 		ufs_qcom_device_reset_ctrl(hba, true);
+		/*
+		 * After sending the SSU command, asserting the rst_n
+		 * line causes the device firmware to wake up and
+		 * execute its reset routine. Allow 10ms for hardware
+		 * reset before transitioning power rails to LPM.
+		 */
+		usleep_range(10000, 11000);
+	}
 
 	/* put a proxy vote on UFS VCCQ LDO in shutdown case */
 	if (pm_op == UFS_SHUTDOWN_PM)
@@ -2739,6 +2747,12 @@ static void ufs_qcom_wait_for_cq_hp_update(struct ufs_hba *hba)
  * @on: If true, enable clocks else disable them.
  * @status: PRE_CHANGE or POST_CHANGE notify
  *
+ * There are certain clocks which comes from the PHY so it needs
+ * to be managed together along with controller clocks which also
+ * provides a better power saving. Hence keep phy_power_off/on calls
+ * in ufs_qcom_setup_clocks, so that PHY's regulators & clks can be
+ * turned on/off along with UFS's clocks.
+ *
  * Return: 0 on success, non-zero on failure.
  */
 static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
@@ -2806,6 +2820,12 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
 				clk_disable_unprepare(host->ref_clki->clk);
 				host->ref_clki->enabled = on;
 			}
+
+			err = phy_power_off(phy);
+			if (err) {
+				dev_err(hba->dev, "phy power off failed, ret=%d\n", err);
+				return err;
+			}
 		}
 		break;
 	case POST_CHANGE:
@@ -2832,7 +2852,6 @@ static int ufs_qcom_setup_clocks(struct ufs_hba *hba, bool on,
 						 __func__, err);
 				return err;
 			}
-
 			if (ufshcd_is_hs_mode(&hba->pwr_info))
 				ufs_qcom_dev_ref_clk_ctrl(host, true);
 
