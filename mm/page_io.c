@@ -25,6 +25,8 @@
 #include <linux/sched/task.h>
 #include <linux/delayacct.h>
 #include <linux/zswap.h>
+#include <linux/kthread.h>
+#include <linux/kfifo.h>
 #include "swap.h"
 
 #undef CREATE_TRACE_POINTS
@@ -176,6 +178,100 @@ bad_bmap:
 }
 
 /*
+ * do_swapout() - Write a folio to swap space
+ * @folio: The folio to write out
+ *
+ * This function writes the folio to swap space, either using zswap or
+ * synchronous write. It ensures that the folio is unlocked and the
+ * reference count is decremented after the operation.
+ */
+static inline void do_swapout(struct folio *folio)
+{
+	struct writeback_control wbc = {
+		.sync_mode = WB_SYNC_NONE,
+		.nr_to_write = SWAP_CLUSTER_MAX,
+		.range_start = 0,
+		.range_end = LLONG_MAX,
+		.for_reclaim = 1,
+	};
+
+	if (zswap_store(folio)) {
+		folio_start_writeback(folio);
+		folio_unlock(folio);
+		folio_end_writeback(folio);
+	} else {
+		__swap_writepage(&folio->page, &wbc); /* Implies folio_unlock(folio) */
+	}
+
+	/* Decrement the folio reference count */
+	folio_put(folio);
+}
+
+/*
+ * kcompressd_store() - Off-load folio compression to kcompressd
+ * @folio: The folio to compress
+ *
+ * This function attempts to off-load the compression of the folio to
+ * kcompressd. If kcompressd is not available or the folio cannot be
+ * compressed, it falls back to synchronous write.
+ *
+ * Returns true if the folio was successfully queued for compression,
+ * false otherwise.
+ */
+static bool kcompressd_store(struct folio *folio)
+{
+	pg_data_t *pgdat = NODE_DATA(numa_node_id());
+	unsigned int ret, sysctl_kcompressd = READ_ONCE(vm_kcompressd);
+	struct folio *head = NULL;
+	unsigned long flags;
+
+	/* Only kswapd can use kcompressd */
+	if (!current_is_kswapd())
+		return false;
+
+	/* kcompressd must be enabled and running */
+	if (!sysctl_kcompressd || unlikely(!pgdat->kcompressd))
+		return false;
+
+	/* We can only off-load anon folios */
+	if (!folio_test_anon(folio))
+		return false;
+
+	/* Swap device must be sync-efficient (e.g. ZRAM or ZSWAP) */
+	if (zswap_never_enabled() &&
+	    !data_race(swp_swap_info(folio->swap)->flags & SWP_SYNCHRONOUS_IO))
+		return false;
+
+	/* If the kcompress_fifo is full, dequeue the oldest folio to swap out
+	 * synchronously so we make room for the new folio.
+	 */
+	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, flags);
+	if (kfifo_len(&pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(folio) &&
+	    unlikely(!kfifo_out(&pgdat->kcompress_fifo, &head, sizeof(folio)))) {
+		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, flags);
+		return false;
+	}
+	spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, flags);
+
+	/* Increment the folio reference count to avoid it being freed */
+	folio_get(folio);
+
+	/* Enqueue the folio for asynchronous compression */
+	ret = kfifo_in_locked(&pgdat->kcompress_fifo, &folio, sizeof(folio),
+			      &pgdat->kcompress_fifo_lock);
+	if (likely(ret))
+		wake_up_interruptible(&pgdat->kcompressd_wait);
+	else
+		folio_put(folio);
+
+	/* If we had to pop the head folio to make space, swap it out now */
+	if (head)
+		do_swapout(head);
+
+	return ret != 0;
+}
+
+/*
  * We may have stale swap cache pages in memory: notice
  * them here and get rid of the unnecessary final write.
  */
@@ -198,6 +294,14 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		folio_unlock(folio);
 		return ret;
 	}
+	/*
+	 * Compression within zswap and zram might block rmap, unmap
+	 * of both file and anon pages, try to do compression async
+	 * if possible.
+	 */
+	if (kcompressd_store(folio))
+		return 0;
+
 	if (zswap_store(folio)) {
 		folio_start_writeback(folio);
 		folio_unlock(folio);
@@ -205,6 +309,29 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		return 0;
 	}
 	__swap_writepage(&folio->page, wbc);
+	return 0;
+}
+
+/*
+ * kcompressd() - Kernel thread for asynchronous swapout compression
+ * @p: Pointer to pg_data_t structure
+ */
+int kcompressd(void *p)
+{
+	pg_data_t *pgdat = (pg_data_t *)p;
+	struct folio *folio;
+
+	current->flags |= PF_MEMALLOC | PF_KSWAPD;
+
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(pgdat->kcompressd_wait,
+				!kfifo_is_empty(&pgdat->kcompress_fifo) ||
+				kthread_should_stop());
+
+		while (kfifo_out_locked(&pgdat->kcompress_fifo,
+				&folio, sizeof(folio), &pgdat->kcompress_fifo_lock))
+			do_swapout(folio);
+	}
 	return 0;
 }
 
