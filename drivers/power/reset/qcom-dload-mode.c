@@ -257,6 +257,11 @@ static int qcom_dload_panic(struct notifier_block *this, unsigned long event,
 	poweroff->in_panic = true;
 	if (enable_dump)
 		msm_enable_dump_mode(true);
+	/*
+	 * Use PSCI v1.1 SYSTEM_RESET2 warm reset on panic so DDR-backed
+	 * ramoops/pstore survives the reset even when full ramdump is off.
+	 */
+	reboot_mode = REBOOT_WARM;
 	return NOTIFY_OK;
 }
 
