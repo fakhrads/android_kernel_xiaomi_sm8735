@@ -955,7 +955,7 @@ static void bbr_update_gains(struct sock *sk)
 	case BBR_PROBE_BW:
 		bbr->pacing_gain = bbr_pacing_gain[bbr->cycle_idx];
 		bbr->cwnd_gain	 = bbr_param(sk, cwnd_gain);
-		if (bbr_param(sk, bw_probe_cwnd_gain) &&
+		if (bbr_param(sk, bw_probe_cwnd_gain) != 0 &&
 		    bbr->cycle_idx == BBR_BW_PROBE_UP)
 			bbr->cwnd_gain +=
 				BBR_UNIT * bbr_param(sk, bw_probe_cwnd_gain) / 4;
@@ -1077,7 +1077,7 @@ static int bbr_update_ecn_alpha(struct sock *sk)
 
 	/* See if we should use ECN sender logic for this connection. */
 	if (!bbr->ecn_eligible && bbr_can_use_ecn(sk) &&
-	    bbr_param(sk, ecn_factor) &&
+	    bbr_param(sk, ecn_factor) != 0 &&
 	    (bbr->min_rtt_us <= bbr_ecn_max_rtt_us ||
 	     !bbr_ecn_max_rtt_us))
 		bbr->ecn_eligible = 1;
@@ -1184,7 +1184,7 @@ static bool bbr_is_inflight_too_high(const struct sock *sk,
 	}
 
 	if (rs->delivered_ce > 0 && rs->delivered > 0 &&
-	    bbr->ecn_eligible && bbr_param(sk, ecn_thresh)) {
+	    bbr->ecn_eligible && bbr_param(sk, ecn_thresh) != 0) {
 		ecn_thresh = (u64)rs->delivered * bbr_param(sk, ecn_thresh) >>
 				BBR_SCALE;
 		if (rs->delivered_ce > ecn_thresh) {
@@ -1382,7 +1382,7 @@ static void bbr_adapt_lower_bounds(struct sock *sk,
 		return;
 
 	/* ECN response. */
-	if (bbr->ecn_in_round && bbr_param(sk, ecn_factor)) {
+	if (bbr->ecn_in_round && bbr_param(sk, ecn_factor) != 0) {
 		bbr_init_lower_bounds(sk, false);
 		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
 	}
@@ -1719,7 +1719,7 @@ static bool bbr_check_time_to_probe_bw(struct sock *sk,
 	 * but we are seeing ECN marks, then when the ECN marks cease we reprobe
 	 * quickly (in case cross-traffic has ceased and freed up bw).
 	 */
-	if (bbr_param(sk, ecn_reprobe_gain) && bbr->ecn_eligible &&
+	if (bbr_param(sk, ecn_reprobe_gain) != 0 && bbr->ecn_eligible &&
 	    bbr->ecn_in_cycle && !bbr->loss_in_cycle &&
 	    inet_csk(sk)->icsk_ca_state == TCP_CA_Open) {
 		/* Calculate n so that when bbr_raise_inflight_hi_slope()
@@ -1902,7 +1902,7 @@ static void bbr_check_loss_too_high_in_startup(struct sock *sk,
 	 */
 	if (rs->losses && bbr->loss_events_in_round < 0xf)
 		bbr->loss_events_in_round++;  /* update saturating counter */
-	if (bbr_param(sk, full_loss_cnt) && bbr->loss_round_start &&
+	if (bbr_param(sk, full_loss_cnt) != 0 && bbr->loss_round_start &&
 	    inet_csk(sk)->icsk_ca_state == TCP_CA_Recovery &&
 	    bbr->loss_events_in_round >= bbr_param(sk, full_loss_cnt) &&
 	    bbr_is_inflight_too_high(sk, rs)) {
