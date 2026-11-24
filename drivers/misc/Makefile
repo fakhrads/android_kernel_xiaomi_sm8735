@@ -73,3 +73,4 @@ obj-$(CONFIG_QSEECOM_PROXY) 	+= qseecom_proxy.o
 obj-$(CONFIG_PKVM_SMC_FILTER)  += pkvm-smc/
 obj-$(CONFIG_MI_HARDWARE_ID) 	+= hwid/
 obj-$(CONFIG_MIEV) 		+= miev/
+obj-$(CONFIG_NTSYNC)		+= ntsync.o
