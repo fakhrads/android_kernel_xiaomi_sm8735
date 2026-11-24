@@ -232,7 +232,7 @@ static bool kcompressd_store(struct folio *folio)
 		return false;
 
 	/* kcompressd must be enabled and running */
-	if (!sysctl_kcompressd || unlikely(!pgdat->kcompressd))
+	if (!sysctl_kcompressd || unlikely(!pgdat->kcompressd || !pgdat->kcompress_fifo))
 		return false;
 
 	/* We can only off-load anon folios */
@@ -248,8 +248,8 @@ static bool kcompressd_store(struct folio *folio)
 	 * synchronously so we make room for the new folio.
 	 */
 	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, flags);
-	if (kfifo_len(&pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(folio) &&
-	    unlikely(!kfifo_out(&pgdat->kcompress_fifo, &head, sizeof(folio)))) {
+	if (kfifo_len(pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(folio) &&
+	    unlikely(!kfifo_out(pgdat->kcompress_fifo, &head, sizeof(folio)))) {
 		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, flags);
 		return false;
 	}
@@ -259,7 +259,7 @@ static bool kcompressd_store(struct folio *folio)
 	folio_get(folio);
 
 	/* Enqueue the folio for asynchronous compression */
-	ret = kfifo_in_locked(&pgdat->kcompress_fifo, &folio, sizeof(folio),
+	ret = kfifo_in_locked(pgdat->kcompress_fifo, &folio, sizeof(folio),
 			      &pgdat->kcompress_fifo_lock);
 	if (likely(ret))
 		wake_up_interruptible(&pgdat->kcompressd_wait);
@@ -340,10 +340,10 @@ int kcompressd(void *p)
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(pgdat->kcompressd_wait,
-				!kfifo_is_empty(&pgdat->kcompress_fifo) ||
+				!kfifo_is_empty(pgdat->kcompress_fifo) ||
 				kthread_should_stop());
 
-		while (kfifo_out_locked(&pgdat->kcompress_fifo,
+		while (kfifo_out_locked(pgdat->kcompress_fifo,
 				&folio, sizeof(folio), &pgdat->kcompress_fifo_lock))
 			do_swapout(folio);
 	}
