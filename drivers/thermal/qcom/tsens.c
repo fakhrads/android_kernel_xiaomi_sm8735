@@ -303,19 +303,20 @@ static int tsens_read_temp(const struct tsens_sensor *s, int field, int *temp)
 {
 	struct tsens_priv *priv = s->priv;
 	int temp_val[MAX_READ_RETRY] = {0};
-	u32 status;
+	unsigned int status = 0;
 	int ret;
-	u32 last_temp_mask = GENMASK(priv->fields[LAST_TEMP_0].msb,
-					priv->fields[LAST_TEMP_0].lsb);
-	u32 valid_bit = priv->rf[VALID_0] ? BIT(priv->fields[VALID_0].lsb) : 0;
+	u32 last_temp_mask = priv->feat->last_temp_mask ?:
+		GENMASK(priv->fields[LAST_TEMP_0].msb,
+			priv->fields[LAST_TEMP_0].lsb);
+	u32 valid_bit = priv->feat->valid_bit;
 
 	for (int i = 0; i < MAX_READ_RETRY; i++) {
-		ret = regmap_read(priv->tm_map, priv->fields[field].reg, &status);
+		ret = regmap_field_read(priv->rf[field], &status);
 		if (ret)
 			return ret;
 
 		/* VER_0 doesn't have a VALID bit */
-		if (!valid_bit) {
+		if (tsens_version(priv) == VER_0 || !valid_bit) {
 			*temp = status & last_temp_mask;
 			return 0;
 		}
@@ -361,8 +362,9 @@ static int tsens_hw_to_mC(const struct tsens_sensor *s, int temp)
 	struct tsens_priv *priv = s->priv;
 	u32 resolution;
 
-	resolution = priv->fields[LAST_TEMP_0].msb -
-		priv->fields[LAST_TEMP_0].lsb;
+	resolution = priv->feat->last_temp_resolution ?:
+		(priv->fields[LAST_TEMP_0].msb -
+		 priv->fields[LAST_TEMP_0].lsb);
 
 	/* Convert temperature from ADC code to milliCelsius */
 	if (priv->feat->adc)
